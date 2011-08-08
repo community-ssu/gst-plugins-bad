@@ -1,0 +1,29 @@
+From e6e2864153cd2ee7d304616be157b1421fa93436 Mon Sep 17 00:00:00 2001
+From: Stefan Kost <ensonic@users.sf.net>
+Date: Wed, 7 Oct 2009 15:43:22 +0300
+Subject: [PATCH] metadata: don't copy trailing NULL of strings in xmp metadata
+
+Also useing g_strdup, fixes the malloc <-> g_free mismatch.
+---
+ ext/metadata/metadataxmp.c |    7 +++----
+ 1 files changed, 3 insertions(+), 4 deletions(-)
+
+diff --git a/ext/metadata/metadataxmp.c b/ext/metadata/metadataxmp.c
+index 147b96e..9f787c7 100644
+--- a/ext/metadata/metadataxmp.c
++++ b/ext/metadata/metadataxmp.c
+@@ -385,11 +385,10 @@ metadatamux_xmp_create_chunk_from_tag_list (guint8 ** buf, guint32 * size,
+   if (!xmp_serialize (xmp, xmp_str_buf, 0, 2)) {
+     GST_ERROR ("failed to serialize xmp into chunk\n");
+   } else if (xmp_str_buf) {
+-    unsigned int len = strlen (xmp_string_cstr (xmp_str_buf));
++    const gchar *text = xmp_string_cstr (xmp_str_buf);
+ 
+-    *size = len + 1;
+-    *buf = malloc (*size);
+-    memcpy (*buf, xmp_string_cstr (xmp_str_buf), *size);
++    *buf = (guint8 *) g_strdup (text);
++    *size = strlen (text);
+   } else {
+     GST_ERROR ("failed to serialize xmp into chunk\n");
+   }

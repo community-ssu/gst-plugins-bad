@@ -1,0 +1,23 @@
+From 08c673ad5e1a6623097b8a4a6273d856862176d0 Mon Sep 17 00:00:00 2001
+From: =?utf-8?q?Tommi=20My=C3=B6h=C3=A4nen?= <ext-tommi.1.myohanen@nokia.com>
+Date: Wed, 28 Oct 2009 15:28:38 +0200
+Subject: [PATCH] camerabin: use fully buffered file IO with 128kB buffer
+
+---
+ gst/camerabin/camerabinvideo.c |    3 ++-
+ 1 files changed, 2 insertions(+), 1 deletions(-)
+
+diff --git a/gst/camerabin/camerabinvideo.c b/gst/camerabin/camerabinvideo.c
+index 20ec92c..855306d 100644
+--- a/gst/camerabin/camerabinvideo.c
++++ b/gst/camerabin/camerabinvideo.c
+@@ -619,7 +619,8 @@ gst_camerabin_video_create_elements (GstCameraBinVideo * vid)
+           gst_camerabin_create_and_add_element (vidbin, DEFAULT_SINK))) {
+     goto error;
+   }
+-  g_object_set (G_OBJECT (vid->sink), "location", vid->filename->str, "buffer-mode", 2, /* non buffered io */
++  g_object_set (G_OBJECT (vid->sink), "location", vid->filename->str, "buffer-mode", 0, /* fully buffered io */
++      "buffer-size", 131072,    /* 128kB */
+       NULL);
+ 
+   /* Add user set or default audio source element */

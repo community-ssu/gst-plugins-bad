@@ -1,0 +1,42 @@
+From 890de729d80fde1ec59954c742ddd98b80daf18b Mon Sep 17 00:00:00 2001
+From: =?utf-8?q?Tommi=20My=C3=B6h=C3=A4nen?= <ext-tommi.1.myohanen@nokia.com>
+Date: Wed, 9 Dec 2009 09:50:07 +0200
+Subject: [PATCH] camerabin: notify video source element about image/video mode changes
+
+---
+ gst/camerabin/gstcamerabin.c |   15 +++++++++++++++
+ 1 files changed, 15 insertions(+), 0 deletions(-)
+
+diff --git a/gst/camerabin/gstcamerabin.c b/gst/camerabin/gstcamerabin.c
+index 433bb9c..d2ce3a8 100644
+--- a/gst/camerabin/gstcamerabin.c
++++ b/gst/camerabin/gstcamerabin.c
+@@ -947,6 +947,20 @@ gst_camerabin_image_capture_continue (GstCameraBin * camera,
+   return cont;
+ }
+ 
++static void
++gst_camerabin_update_source_mode (GstCameraBin * camera)
++{
++  if (g_object_class_find_property (G_OBJECT_GET_CLASS (camera->src_vid_src),
++    "viewfinder-mode"))
++  {
++    /* This is v4l2camsrc-specific */
++    guint mode = camera->mode == MODE_IMAGE ? 0 : 1;
++    GST_DEBUG_OBJECT (camera, "updating src element mode: %d", mode);
++    g_object_set (G_OBJECT (camera->src_vid_src),
++        "viewfinder-mode", mode, NULL);
++  }
++}
++
+ /*
+  * gst_camerabin_change_mode:
+  * @camera: camerabin object
+@@ -987,6 +1001,7 @@ gst_camerabin_change_mode (GstCameraBin * camera, gint mode)
+       } else if (camera->mode == MODE_VIDEO) {
+         camera->active_bin = camera->vidbin;
+       }
++      gst_camerabin_update_source_mode (camera);
+       gst_camerabin_reset_to_view_finder (camera, FALSE);
+     }
+   }

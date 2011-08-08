@@ -1,0 +1,26 @@
+From 7cd7c6b84f2b98148afcfc0a634c39c54a2fe47a Mon Sep 17 00:00:00 2001
+From: =?utf-8?q?Tommi=20My=C3=B6h=C3=A4nen?= <ext-tommi.1.myohanen@nokia.com>
+Date: Mon, 26 Oct 2009 09:55:53 +0200
+Subject: [PATCH] camerabin: replace gst_bus_poll with gst_bus_timed_pop_filtered
+
+---
+ gst/camerabin/camerabinpreview.c |    5 ++---
+ 1 files changed, 2 insertions(+), 3 deletions(-)
+
+diff --git a/gst/camerabin/camerabinpreview.c b/gst/camerabin/camerabinpreview.c
+index 9eb1355..255e1c3 100644
+--- a/gst/camerabin/camerabinpreview.c
++++ b/gst/camerabin/camerabinpreview.c
+@@ -204,10 +204,9 @@ gst_camerabin_preview_convert (GstCameraBin * camera,
+ 
+   g_signal_emit_by_name (src, "push-buffer", buf, &fret);
+ 
+-  /* TODO: do we need to use a bus poll, can we just register a callback to the bus? */
+   bus = gst_element_get_bus (pipeline);
+-  msg =
+-      gst_bus_poll (bus, GST_MESSAGE_ERROR | GST_MESSAGE_EOS, 25 * GST_SECOND);
++  msg = gst_bus_timed_pop_filtered (bus, (25 * GST_SECOND),
++      GST_MESSAGE_ERROR | GST_MESSAGE_EOS);
+ 
+   if (msg) {
+     switch (GST_MESSAGE_TYPE (msg)) {

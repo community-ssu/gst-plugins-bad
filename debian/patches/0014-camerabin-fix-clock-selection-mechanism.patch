@@ -1,0 +1,308 @@
+From 96f6197ee3d19c324033de4cee5ca7e0ee980d69 Mon Sep 17 00:00:00 2001
+From: =?utf-8?q?Tommi=20My=C3=B6h=C3=A4nen?= <ext-tommi.1.myohanen@nokia.com>
+Date: Tue, 13 Oct 2009 15:37:15 +0300
+Subject: [PATCH] camerabin: fix clock selection mechanism
+
+CamerabinVideo must send CLOCK_PROVIDE messages to announce the
+existence of new audio clock, when the bin is put to PAUSED mode.
+Camerabin also need to unlock video bin *before* setting itself
+to PAUSED when starting video recording to make the clock selection
+to work properly.
+---
+ gst/camerabin/camerabinvideo.c |   26 ++++++++
+ gst/camerabin/gstcamerabin.c   |  127 +++++++++++++++++++++++++++-------------
+ 2 files changed, 112 insertions(+), 41 deletions(-)
+
+diff --git a/gst/camerabin/camerabinvideo.c b/gst/camerabin/camerabinvideo.c
+index f435c50..20ec92c 100644
+--- a/gst/camerabin/camerabinvideo.c
++++ b/gst/camerabin/camerabinvideo.c
+@@ -97,6 +97,8 @@ static gboolean camerabin_video_sink_have_event (GstPad * pad, GstEvent * event,
+     gpointer u_data);
+ static gboolean gst_camerabin_video_create_elements (GstCameraBinVideo * vid);
+ static void gst_camerabin_video_destroy_elements (GstCameraBinVideo * vid);
++static void gst_camerabin_video_send_clock_msg (GstCameraBinVideo * vid,
++    gboolean ready);
+ 
+ GST_BOILERPLATE (GstCameraBinVideo, gst_camerabin_video, GstBin, GST_TYPE_BIN);
+ 
+@@ -322,6 +324,7 @@ gst_camerabin_video_change_state (GstElement * element,
+       vid->calculate_adjust_ts_aud = TRUE;
+       g_object_set (G_OBJECT (vid->sink), "async", FALSE, NULL);
+       gst_element_set_locked_state (vid->sink, FALSE);
++      gst_camerabin_video_send_clock_msg (vid, TRUE);
+       break;
+     case GST_STATE_CHANGE_PAUSED_TO_PLAYING:
+       vid->calculate_adjust_ts_video = TRUE;
+@@ -333,6 +336,7 @@ gst_camerabin_video_change_state (GstElement * element,
+       GST_INFO ("write video file: %s", vid->filename->str);
+       gst_element_set_locked_state (vid->sink, TRUE);
+       gst_element_set_state (vid->sink, GST_STATE_NULL);
++      gst_camerabin_video_send_clock_msg (vid, FALSE);
+       break;
+     default:
+       break;
+@@ -776,6 +780,28 @@ gst_camerabin_video_destroy_elements (GstCameraBinVideo * vid)
+ }
+ 
+ /*
++* gst_camerabin_video_send_clock_msg:
++* @vid: a pointer to #GstCameraBinVideo
++* @ready: TRUE. if the clock should be informed to be ready, otherwise FALSE
++*
++* Send GST_MESSAGE_CLOCK_PROVIDE message. This is needed in order to GstBin
++* to keep track of available clocks, and select one when needed.
++*/
++static void
++gst_camerabin_video_send_clock_msg (GstCameraBinVideo * vid, gboolean ready)
++{
++  GstMessage *clock_message;
++
++  clock_message =
++      gst_message_new_clock_provide (GST_OBJECT_CAST (vid), NULL, ready);
++
++  if (!gst_element_post_message (GST_ELEMENT_CAST (vid), clock_message)) {
++    GST_WARNING_OBJECT (vid,
++        "This element has no bus, therefore no message sent!");
++  }
++}
++
++/*
+  * Set & get mute and video capture elements
+  */
+ 
+diff --git a/gst/camerabin/gstcamerabin.c b/gst/camerabin/gstcamerabin.c
+index 40a0ae4..606187b 100644
+--- a/gst/camerabin/gstcamerabin.c
++++ b/gst/camerabin/gstcamerabin.c
+@@ -301,7 +301,11 @@ static gboolean
+ gst_camerabin_have_src_buffer (GstPad * pad, GstBuffer * buffer,
+     gpointer u_data);
+ 
+-static void gst_camerabin_reset_to_view_finder (GstCameraBin * camera);
++static void gst_camerabin_reset_to_view_finder (GstCameraBin * camera,
++    gboolean update_clock);
++
++static gboolean gst_camerabin_change_videobin_state (GstCameraBin * camera,
++    gboolean active);
+ 
+ static void gst_camerabin_do_stop (GstCameraBin * camera);
+ 
+@@ -985,7 +989,7 @@ gst_camerabin_change_mode (GstCameraBin * camera, gint mode)
+       } else if (camera->mode == MODE_VIDEO) {
+         camera->active_bin = camera->vidbin;
+       }
+-      gst_camerabin_reset_to_view_finder (camera);
++      gst_camerabin_reset_to_view_finder (camera, FALSE);
+     }
+   }
+ }
+@@ -1608,7 +1612,6 @@ gst_camerabin_start_image_capture (GstCameraBin * camera)
+ static void
+ gst_camerabin_start_video_recording (GstCameraBin * camera)
+ {
+-  GstStateChangeReturn state_ret;
+   /* FIXME: how to ensure resolution and fps is supported by CPU?
+    * use a queue overrun signal?
+    */
+@@ -1616,28 +1619,13 @@ gst_camerabin_start_video_recording (GstCameraBin * camera)
+ 
+   gst_camerabin_rewrite_tags (camera);
+ 
+-  /* Pause the pipeline in order to distribute new clock in paused_to_playing */
+-  state_ret = gst_element_set_state (GST_ELEMENT (camera), GST_STATE_PAUSED);
+-
+-  if (state_ret != GST_STATE_CHANGE_FAILURE) {
++  if (gst_camerabin_change_videobin_state (camera, TRUE)) {
+     g_mutex_lock (camera->capture_mutex);
+     camera->capturing = TRUE;
+     g_mutex_unlock (camera->capture_mutex);
+-    gst_element_set_locked_state (camera->vidbin, FALSE);
+-    g_object_set (G_OBJECT (camera->src_out_sel), "resend-latest", FALSE,
+-        "active-pad", camera->pad_src_vid, NULL);
+-
+-    /* Enable video mode in v4l2camsrc */
+-    if (g_object_class_find_property (G_OBJECT_GET_CLASS (camera->src_vid_src),
+-            "capture-mode")) {
+-      g_object_set (G_OBJECT (camera->src_vid_src), "capture-mode", 2, NULL);
+-    }
+-    gst_element_set_state (GST_ELEMENT (camera), GST_STATE_PLAYING);
+-    gst_element_set_locked_state (camera->vidbin, TRUE);
+   } else {
+     GST_WARNING_OBJECT (camera, "videobin state change failed");
+-    gst_element_set_state (camera->vidbin, GST_STATE_NULL);
+-    gst_camerabin_reset_to_view_finder (camera);
++    gst_camerabin_reset_to_view_finder (camera, FALSE);
+   }
+ }
+ 
+@@ -1662,8 +1650,7 @@ gst_camerabin_send_video_eos (GstCameraBin * camera)
+     gst_pad_send_event (videopad, gst_event_new_eos ());
+     gst_object_unref (videopad);
+     camera->eos_handled = TRUE;
+-  }
+-  else {
++  } else {
+     GST_INFO_OBJECT (camera, "dropping duplicate EOS");
+   }
+ }
+@@ -1789,7 +1776,7 @@ done:
+ 
+   GST_DEBUG_OBJECT (camera, "image captured, switching to viewfinder");
+ 
+-  gst_camerabin_reset_to_view_finder (camera);
++  gst_camerabin_reset_to_view_finder (camera, FALSE);
+ 
+   GST_DEBUG_OBJECT (camera, "switched back to viewfinder");
+ 
+@@ -1816,8 +1803,7 @@ gst_camerabin_have_vid_buffer (GstPad * pad, GstBuffer * buffer,
+       buffer, GST_BUFFER_SIZE (buffer));
+ 
+   if (camera->video_preview_caps &&
+-      !camera->video_preview_buffer &&
+-      !camera->stop_requested) {
++      !camera->video_preview_buffer && !camera->stop_requested) {
+     GST_DEBUG ("storing video preview %p", buffer);
+     camera->video_preview_buffer = gst_buffer_copy (buffer);
+   }
+@@ -1946,16 +1932,83 @@ gst_camerabin_have_queue_data (GstPad * pad, GstMiniObject * mini_obj,
+ }
+ 
+ /*
++ * gst_camerabin_change_videobin_state:
++ * @camera: camerabin object
++ * @active: TRUE, if videobin should be set active.
++ *
++ * Sets videobin state in a controlled way and changes pipeline settings
++ * accordingly. This also re-distributes the clock in camerabin, when either
++ * new clock appears (video recording starts, pulsesrc provides clock) or
++ * disappears (video recording stops and pulsesrc is put to READY).
++ *
++ * Returns: TRUE if state change succeeded.
++ */
++static gboolean
++gst_camerabin_change_videobin_state (GstCameraBin * camera, gboolean active)
++{
++  GstStateChangeReturn state_ret;
++
++  g_return_val_if_fail (camera->active_bin == camera->vidbin, FALSE);
++
++  GST_DEBUG_OBJECT (camera, "setting videobin %sactive", active ? "" : "in");
++
++  if (active) {
++    /* unlock videobin state so it will move to PAUSED along with camerabin */
++    gst_element_set_locked_state (camera->vidbin, FALSE);
++  }
++
++  /* Pause the pipeline in order to distribute new clock */
++  state_ret = gst_element_set_state (GST_ELEMENT (camera), GST_STATE_PAUSED);
++  if (state_ret == GST_STATE_CHANGE_FAILURE) {
++    goto failed;
++  }
++
++  if (active) {
++    g_object_set (G_OBJECT (camera->src_out_sel), "resend-latest", FALSE,
++        "active-pad", camera->pad_src_vid, NULL);
++
++    /* Enable video mode in v4l2camsrc */
++    if (g_object_class_find_property (G_OBJECT_GET_CLASS (camera->src_vid_src),
++            "capture-mode")) {
++      g_object_set (G_OBJECT (camera->src_vid_src), "capture-mode", 2, NULL);
++    }
++  } else {
++    /* vidbin is still in locked state */
++    state_ret = gst_element_set_state (camera->vidbin, GST_STATE_READY);
++    if (state_ret == GST_STATE_CHANGE_FAILURE) {
++      goto failed;
++    }
++  }
++
++  gst_element_set_state (GST_ELEMENT (camera), GST_STATE_PLAYING);
++
++  if (active) {
++    gst_element_set_locked_state (camera->vidbin, TRUE);
++  }
++
++  return TRUE;
++
++/* ERRORS */
++failed:
++  GST_WARNING_OBJECT (camera, "state change failed");
++  gst_element_set_state (camera->vidbin, GST_STATE_NULL);
++  camera->active_bin = NULL;
++  return FALSE;
++}
++
++/*
+  * gst_camerabin_reset_to_view_finder:
+  * @camera: camerabin object
++ * @update_clock: set to TRUE if camerabin should redistribute new clock.
++ * This is needed when video recording stops and audiosrc clock disappears.
+  *
+  * Stop capturing and set camerabin to view finder mode.
+  * Reset capture counters and flags.
+  */
+ static void
+-gst_camerabin_reset_to_view_finder (GstCameraBin * camera)
++gst_camerabin_reset_to_view_finder (GstCameraBin * camera,
++    gboolean update_clock)
+ {
+-  GstStateChangeReturn state_ret;
+   GST_DEBUG_OBJECT (camera, "resetting");
+ 
+   if (camera->src_out_sel) {
+@@ -1964,15 +2017,8 @@ gst_camerabin_reset_to_view_finder (GstCameraBin * camera)
+         "active-pad", camera->pad_src_view, NULL);
+   }
+ 
+-  /* Set video bin to READY state */
+-  if (camera->active_bin == camera->vidbin) {
+-    state_ret = gst_element_set_state (camera->active_bin, GST_STATE_READY);
+-    if (state_ret == GST_STATE_CHANGE_FAILURE) {
+-      GST_WARNING_OBJECT (camera, "state change failed");
+-      gst_element_set_state (camera->active_bin, GST_STATE_NULL);
+-      camera->active_bin = NULL;
+-    }
+-  }
++  if (update_clock && camera->active_bin == camera->vidbin)
++    gst_camerabin_change_videobin_state (camera, FALSE);
+ 
+   /* Reset counters and flags */
+   camera->stop_requested = FALSE;
+@@ -2935,8 +2981,7 @@ gst_camerabin_set_property (GObject * object, guint prop_id,
+       if (camera->mode == MODE_IMAGE) {
+         prev_pipe = &camera->preview_pipeline;
+         prev_caps = &camera->preview_caps;
+-      }
+-      else if (camera->mode == MODE_VIDEO) {
++      } else if (camera->mode == MODE_VIDEO) {
+         prev_pipe = &camera->video_preview_pipeline;
+         prev_caps = &camera->video_preview_caps;
+       }
+@@ -2955,7 +3000,7 @@ gst_camerabin_set_property (GObject * object, guint prop_id,
+         GST_OBJECT_UNLOCK (camera);
+ 
+         if (new_caps && !gst_caps_is_any (new_caps) &&
+-          !gst_caps_is_empty (new_caps)) {
++            !gst_caps_is_empty (new_caps)) {
+           *prev_pipe = gst_camerabin_preview_create_pipeline (camera, new_caps);
+         }
+       }
+@@ -3100,7 +3145,7 @@ gst_camerabin_change_state (GstElement * element, GstStateChange transition)
+         camera->capturing = FALSE;
+         /* Reset capture and don't wait for capturing to finish properly.
+            Proper capturing should have been finished before going to READY. */
+-        gst_camerabin_reset_to_view_finder (camera);
++        gst_camerabin_reset_to_view_finder (camera, FALSE);
+         g_cond_signal (camera->cond);
+       }
+       g_mutex_unlock (camera->capture_mutex);
+@@ -3254,7 +3299,7 @@ gst_camerabin_user_stop (GstCameraBin * camera)
+   if (camera->active_bin == camera->vidbin) {
+     GST_INFO_OBJECT (camera, "stopping video capture");
+     gst_camerabin_do_stop (camera);
+-    gst_camerabin_reset_to_view_finder (camera);
++    gst_camerabin_reset_to_view_finder (camera, TRUE);
+   } else {
+     GST_INFO_OBJECT (camera, "stopping image capture isn't needed");
+   }

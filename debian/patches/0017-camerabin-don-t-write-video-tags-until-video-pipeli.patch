@@ -1,0 +1,31 @@
+From e29e3c5daa6f2394d0905bc73ea31910c84fae92 Mon Sep 17 00:00:00 2001
+From: =?utf-8?q?Tommi=20My=C3=B6h=C3=A4nen?= <ext-tommi.1.myohanen@nokia.com>
+Date: Fri, 6 Nov 2009 12:25:52 +0200
+Subject: [PATCH] camerabin: don't write video tags until video pipeline is ready
+
+---
+ gst/camerabin/gstcamerabin.c |    4 ++--
+ 1 files changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/gst/camerabin/gstcamerabin.c b/gst/camerabin/gstcamerabin.c
+index 606187b..1f19f9a 100644
+--- a/gst/camerabin/gstcamerabin.c
++++ b/gst/camerabin/gstcamerabin.c
+@@ -1617,8 +1617,6 @@ gst_camerabin_start_video_recording (GstCameraBin * camera)
+    */
+   GST_INFO_OBJECT (camera, "starting video capture");
+ 
+-  gst_camerabin_rewrite_tags (camera);
+-
+   if (gst_camerabin_change_videobin_state (camera, TRUE)) {
+     g_mutex_lock (camera->capture_mutex);
+     camera->capturing = TRUE;
+@@ -1971,6 +1969,8 @@ gst_camerabin_change_videobin_state (GstCameraBin * camera, gboolean active)
+     if (g_object_class_find_property (G_OBJECT_GET_CLASS (camera->src_vid_src),
+             "capture-mode")) {
+       g_object_set (G_OBJECT (camera->src_vid_src), "capture-mode", 2, NULL);
++
++      gst_camerabin_rewrite_tags (camera);
+     }
+   } else {
+     /* vidbin is still in locked state */

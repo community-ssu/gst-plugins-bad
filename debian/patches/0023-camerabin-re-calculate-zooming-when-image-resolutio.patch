@@ -1,0 +1,80 @@
+From f3fc2c7ca0d6791bfe0eed6afa7aa785d1559044 Mon Sep 17 00:00:00 2001
+From: =?utf-8?q?Tommi=20My=C3=B6h=C3=A4nen?= <ext-tommi.1.myohanen@nokia.com>
+Date: Tue, 22 Dec 2009 10:42:51 +0200
+Subject: [PATCH] camerabin: re-calculate zooming when image resolution is adapted
+
+Sometimes camera device may not be possible to provide exactly the same
+sized HQ image as requested. Camerabin takes this into account, but
+in this case it didn't update the cropping parameters correctly.
+---
+ gst/camerabin/gstcamerabin.c |   44 ++++++++++++++++++++++-------------------
+ 1 files changed, 24 insertions(+), 20 deletions(-)
+
+diff --git a/gst/camerabin/gstcamerabin.c b/gst/camerabin/gstcamerabin.c
+index d2ce3a8..969ebe0 100644
+--- a/gst/camerabin/gstcamerabin.c
++++ b/gst/camerabin/gstcamerabin.c
+@@ -1451,8 +1451,8 @@ gst_camerabin_adapt_video_resolution (GstCameraBin * camera, GstCaps * caps)
+   GstStructure *st;
+   gint width = 0, height = 0;
+   GstCaps *filter_caps = NULL;
+-  gint top, bottom, left, right, crop;
+-  gdouble ratio_w, ratio_h;
++  gint w2_crop, h2_crop, zoom;
++  gdouble ratio_orig, ratio_req;
+ 
+   g_return_if_fail (camera->width != 0 && camera->height != 0);
+ 
+@@ -1478,30 +1478,34 @@ gst_camerabin_adapt_video_resolution (GstCameraBin * camera, GstCaps * caps)
+   g_object_set (G_OBJECT (camera->src_filter), "caps", filter_caps, NULL);
+   gst_caps_unref (filter_caps);
+ 
+-  /* Crop if requested aspect ratio differs from incoming frame aspect ratio */
+-
+-  /* Don't override original crop values in case we have zoom applied */
+-  g_object_get (G_OBJECT (camera->src_zoom_crop), "top", &top, "bottom",
+-      &bottom, "left", &left, "right", &right, NULL);
++  /* We need to re-calculate zooming (cropping values) because original
++   * image may be different-sized than what we want */
++  zoom = g_atomic_int_get (&camera->zoom);
+ 
+-  ratio_w = (gdouble) width / camera->width;
+-  ratio_h = (gdouble) height / camera->height;
++  ratio_orig = (gdouble) width / height;
++  ratio_req = (gdouble) camera->width / camera->height;
+ 
+-  if (ratio_w < ratio_h) {
+-    crop = height - (camera->height * ratio_w);
+-    top += crop / 2;
+-    bottom += crop / 2;
++  if (ratio_req > ratio_orig) {
++    /* Requested size is wider than original image from camera */
++    guint tmp_h = width * camera->height / camera->width;
++    w2_crop = (width - (width * ZOOM_1X / zoom)) / 2;
++    h2_crop = (height - (tmp_h * ZOOM_1X / zoom)) / 2;
+   } else {
+-    crop = width - (camera->width * ratio_h);
+-    left += crop / 2;
+-    right += crop / 2;
++    /* Requested size is taller than original image from camera */
++    guint tmp_w = ratio_req * height;
++    w2_crop = (width - (tmp_w * ZOOM_1X / zoom)) / 2;
++    h2_crop = (height - (height * ZOOM_1X / zoom)) / 2;
+   }
+ 
++  /* force number of pixels cropped from left to be even, to avoid slow code
++   * path on videoscale */
++  w2_crop &= 0xFFFE;
++
+   GST_INFO_OBJECT (camera,
+-      "updating crop: left:%d, right:%d, top:%d, bottom:%d", left, right, top,
+-      bottom);
+-  g_object_set (G_OBJECT (camera->src_zoom_crop), "top", top, "bottom", bottom,
+-      "left", left, "right", right, NULL);
++      "updating crop: left:%d, right:%d, top:%d, bottom:%d", w2_crop, w2_crop,
++       h2_crop, h2_crop);
++  g_object_set (G_OBJECT (camera->src_zoom_crop), "top", h2_crop,
++      "bottom", h2_crop, "left", w2_crop, "right", w2_crop, NULL);
+ }
+ 
+ /*

@@ -1,0 +1,28 @@
+From 9471dcfa3a4759463fb027ae523e62e13ac98c3f Mon Sep 17 00:00:00 2001
+From: =?utf-8?q?Tommi=20My=C3=B6h=C3=A4nen?= <ext-tommi.1.myohanen@nokia.com>
+Date: Fri, 11 Dec 2009 14:53:46 +0200
+Subject: [PATCH] camerabin: forget stored framerate when resolution changes
+
+Camerabin stores the viewfinder framerate before forcing it to lowest
+one when switching to night mode. However, when viewfinder resolution
+changes, this framerate can't be used anymore, and should be forgotten.
+---
+ gst/camerabin/gstcamerabin.c |    5 +++++
+ 1 files changed, 5 insertions(+), 0 deletions(-)
+
+diff --git a/gst/camerabin/gstcamerabin.c b/gst/camerabin/gstcamerabin.c
+index bf17bcc..433bb9c 100644
+--- a/gst/camerabin/gstcamerabin.c
++++ b/gst/camerabin/gstcamerabin.c
+@@ -3388,6 +3388,11 @@ gst_camerabin_user_res_fps (GstCameraBin * camera, gint width, gint height,
+   camera->height = height;
+   camera->fps_n = fps_n;
+   camera->fps_d = fps_d;
++
++  /* Forget old framerate, is can't be used anymore */
++  camera->pre_night_fps_n = 0;
++  camera->pre_night_fps_d = 0;
++
+   if (pending != GST_STATE_VOID_PENDING) {
+     GST_LOG_OBJECT (camera, "restoring pending state: %s",
+         gst_element_state_get_name (pending));

@@ -1,0 +1,421 @@
+From ee9e58f97763feb5aab40bf1fed39dfec269684b Mon Sep 17 00:00:00 2001
+From: =?utf-8?q?Tommi=20My=C3=B6h=C3=A4nen?= <ext-tommi.1.myohanen@nokia.com>
+Date: Mon, 5 Oct 2009 15:23:34 +0300
+Subject: [PATCH] camerabin: implement video preview creation
+
+Completes preview creation mechanism to be able to provide a preview
+image for video clips too.
+---
+ gst/camerabin/camerabinpreview.c |   69 ++++++++++++------------
+ gst/camerabin/camerabinpreview.h |    9 ++-
+ gst/camerabin/gstcamerabin.c     |  110 ++++++++++++++++++++++++++++---------
+ gst/camerabin/gstcamerabin.h     |    6 ++
+ 4 files changed, 130 insertions(+), 64 deletions(-)
+
+diff --git a/gst/camerabin/camerabinpreview.c b/gst/camerabin/camerabinpreview.c
+index b8e5338..9eb1355 100644
+--- a/gst/camerabin/camerabinpreview.c
++++ b/gst/camerabin/camerabinpreview.c
+@@ -59,24 +59,20 @@ create_element (const gchar * factory_name, const gchar * elem_name,
+ 
+ /**
+  * gst_camerabin_preview_create_pipeline:
+- * @camera: camerabin object
++ * @caps: pointer to the caps used in pipeline
+  *
+- * Create a preview converter pipeline.
++ * Create a preview converter pipeline that outputs the format defined in
++ * @caps parameter.
+  *
+- * Returns: TRUE if pipeline was constructed, otherwise FALSE.
++ * Returns: New pipeline, or NULL if error occured.
+  */
+-gboolean
+-gst_camerabin_preview_create_pipeline (GstCameraBin * camera)
++GstElement *
++gst_camerabin_preview_create_pipeline (GstCameraBin * camera, GstCaps * caps)
+ {
+-  GstElement *src, *csp, *filter, *vscale, *sink;
++  GstElement *pipe, *src, *csp, *filter, *vscale, *sink;
+   GError *error = NULL;
+ 
+-  if (!camera->preview_caps) {
+-    return FALSE;
+-  }
+-
+-  /* Destroy old pipeline, if any */
+-  gst_camerabin_preview_destroy_pipeline (camera);
++  g_return_val_if_fail (caps != NULL, FALSE);
+ 
+   GST_DEBUG ("creating elements");
+ 
+@@ -87,17 +83,19 @@ gst_camerabin_preview_create_pipeline (GstCameraBin * camera)
+       !create_element ("fakesink", "prev_sink", &sink, &error))
+     goto no_elements;
+ 
+-  camera->preview_pipeline = gst_pipeline_new ("preview-pipeline");
+-  if (camera->preview_pipeline == NULL)
++  /* We have multiple pipelines created by using this function, so we can't
++   * give a name to them. Another way would to ensure the uniqueness of the
++   * name here*/
++  pipe = gst_pipeline_new (NULL);
++  if (pipe == NULL)
+     goto no_pipeline;
+ 
+   GST_DEBUG ("adding elements");
+-  gst_bin_add_many (GST_BIN (camera->preview_pipeline),
+-      src, csp, filter, vscale, sink, NULL);
++  gst_bin_add_many (GST_BIN (pipe), src, csp, filter, vscale, sink, NULL);
+ 
+-  GST_DEBUG ("preview format is: %" GST_PTR_FORMAT, camera->preview_caps);
++  GST_DEBUG ("preview format is: %" GST_PTR_FORMAT, caps);
+ 
+-  g_object_set (filter, "caps", camera->preview_caps, NULL);
++  g_object_set (filter, "caps", caps, NULL);
+   g_object_set (sink, "preroll-queue-len", 1, "signal-handoffs", TRUE, NULL);
+   g_object_set (vscale, "method", 0, NULL);
+ 
+@@ -118,20 +116,20 @@ gst_camerabin_preview_create_pipeline (GstCameraBin * camera)
+   if (!gst_element_link_pads (filter, "src", sink, "sink"))
+     return FALSE;
+ 
+-  return TRUE;
++  return pipe;
+ 
+   /* ERRORS */
+ no_elements:
+   {
+     g_warning ("Could not make preview pipeline: %s", error->message);
+     g_error_free (error);
+-    return FALSE;
++    return NULL;
+   }
+ no_pipeline:
+   {
+     g_warning ("Could not make preview pipeline: %s",
+         "no pipeline (unknown error)");
+-    return FALSE;
++    return NULL;
+   }
+ }
+ 
+@@ -139,23 +137,25 @@ no_pipeline:
+ /**
+  * gst_camerabin_preview_destroy_pipeline:
+  * @camera: camerabin object
++ * @pipeline: the pipeline to be destroyed
+  *
+  * Destroy preview converter pipeline.
+  */
+ void
+-gst_camerabin_preview_destroy_pipeline (GstCameraBin * camera)
++gst_camerabin_preview_destroy_pipeline (GstCameraBin * camera,
++    GstElement * pipeline)
+ {
+-  if (camera->preview_pipeline) {
+-    gst_element_set_state (camera->preview_pipeline, GST_STATE_NULL);
+-    gst_object_unref (camera->preview_pipeline);
+-    camera->preview_pipeline = NULL;
+-  }
++  g_return_if_fail (pipeline != NULL);
++
++  gst_element_set_state (pipeline, GST_STATE_NULL);
++  gst_object_unref (pipeline);
+ }
+ 
+ 
+ /**
+  * gst_camerabin_preview_convert:
+  * @camera: camerabin object
++ * @pipeline: preview pipeline to use
+  * @buf: #GstBuffer that contains the frame to be converted
+  *
+  * Create a preview image of the given frame.
+@@ -163,7 +163,8 @@ gst_camerabin_preview_destroy_pipeline (GstCameraBin * camera)
+  * Returns: converted preview image, or NULL if operation failed.
+  */
+ GstBuffer *
+-gst_camerabin_preview_convert (GstCameraBin * camera, GstBuffer * buf)
++gst_camerabin_preview_convert (GstCameraBin * camera,
++    GstElement * pipeline, GstBuffer * buf)
+ {
+   GstMessage *msg;
+   GstBuffer *result = NULL;
+@@ -175,13 +176,13 @@ gst_camerabin_preview_convert (GstCameraBin * camera, GstBuffer * buf)
+ 
+   g_return_val_if_fail (GST_BUFFER_CAPS (buf) != NULL, NULL);
+ 
+-  if (camera->preview_pipeline == NULL) {
++  if (pipeline == NULL) {
+     GST_WARNING ("pipeline is NULL");
+     goto no_pipeline;
+   }
+ 
+-  src = gst_bin_get_by_name (GST_BIN (camera->preview_pipeline), "prev_src");
+-  sink = gst_bin_get_by_name (GST_BIN (camera->preview_pipeline), "prev_sink");
++  src = gst_bin_get_by_name (GST_BIN (pipeline), "prev_src");
++  sink = gst_bin_get_by_name (GST_BIN (pipeline), "prev_sink");
+ 
+   if (!src || !sink) {
+     GST_WARNING ("pipeline doesn't have src / sink elements");
+@@ -199,12 +200,12 @@ gst_camerabin_preview_convert (GstCameraBin * camera, GstBuffer * buf)
+ 
+   GST_DEBUG ("running conversion pipeline, source is: %" GST_PTR_FORMAT,
+       GST_BUFFER_CAPS (buf));
+-  gst_element_set_state (camera->preview_pipeline, GST_STATE_PLAYING);
++  gst_element_set_state (pipeline, GST_STATE_PLAYING);
+ 
+   g_signal_emit_by_name (src, "push-buffer", buf, &fret);
+ 
+   /* TODO: do we need to use a bus poll, can we just register a callback to the bus? */
+-  bus = gst_element_get_bus (camera->preview_pipeline);
++  bus = gst_element_get_bus (pipeline);
+   msg =
+       gst_bus_poll (bus, GST_MESSAGE_ERROR | GST_MESSAGE_EOS, 25 * GST_SECOND);
+ 
+@@ -245,7 +246,7 @@ gst_camerabin_preview_convert (GstCameraBin * camera, GstBuffer * buf)
+ 
+   g_signal_handlers_disconnect_by_func (sink, G_CALLBACK (save_result),
+       &result);
+-  gst_element_set_state (camera->preview_pipeline, GST_STATE_READY);
++  gst_element_set_state (pipeline, GST_STATE_READY);
+ 
+   GST_BUFFER_FLAGS (buf) = bflags;
+ 
+diff --git a/gst/camerabin/camerabinpreview.h b/gst/camerabin/camerabinpreview.h
+index cadefed..80cafac 100644
+--- a/gst/camerabin/camerabinpreview.h
++++ b/gst/camerabin/camerabinpreview.h
+@@ -26,12 +26,15 @@
+ #include "gstcamerabin.h"
+ 
+ G_BEGIN_DECLS
+-    gboolean gst_camerabin_preview_create_pipeline (GstCameraBin * camera);
+ 
+-void gst_camerabin_preview_destroy_pipeline (GstCameraBin * camera);
++GstElement * gst_camerabin_preview_create_pipeline (GstCameraBin * camera,
++    GstCaps *caps);
++
++void gst_camerabin_preview_destroy_pipeline (GstCameraBin * camera,
++    GstElement * pipeline);
+ 
+ GstBuffer *gst_camerabin_preview_convert (GstCameraBin * camera,
+-    GstBuffer * buf);
++    GstElement * pipeline, GstBuffer * buf);
+ 
+ G_END_DECLS
+ #endif                          /* __CAMERABINPREVIEW_H__ */
+diff --git a/gst/camerabin/gstcamerabin.c b/gst/camerabin/gstcamerabin.c
+index 3a577f1..40a0ae4 100644
+--- a/gst/camerabin/gstcamerabin.c
++++ b/gst/camerabin/gstcamerabin.c
+@@ -91,6 +91,22 @@
+  * </para>
+  * </refsect2>
+  * <refsect2>
++ * <title>Video and image previews</title>
++ * <para>
++ * GstCameraBin contains "preview-caps" property, which is used to determine
++ * whether the application wants a preview image of the captured picture or
++ * video. When set, a GstMessage named "preview-image" will be sent. This
++ * message will contain a GstBuffer holding the preview image, converted
++ * to a format defined by those preview caps. The ownership of the preview
++ * image is kept in GstCameraBin, so application should ref the preview buffer
++ * object if it needs to use it elsewhere than in message handler.
++ * 
++ * Defining preview caps is done by selecting the capturing mode first and
++ * then setting the property. Camerabin remembers caps separately for both
++ * modes, so it is not necessary to set the caps again after changing the mode.
++ * </para>
++ * </refsect2>
++ * <refsect2>
+  * <note>
+  * <para>
+  * Since the muxers tested so far have problems with discontinous buffers, QoS
+@@ -887,18 +903,12 @@ camerabin_dispose_elements (GstCameraBin * camera)
+   }
+ 
+   /* Free caps */
+-  if (camera->image_capture_caps) {
+-    gst_caps_replace (&camera->image_capture_caps, NULL);
+-  }
+-  if (camera->view_finder_caps) {
+-    gst_caps_replace (&camera->view_finder_caps, NULL);
+-  }
+-  if (camera->allowed_caps) {
+-    gst_caps_replace (&camera->allowed_caps, NULL);
+-  }
+-  if (camera->preview_caps) {
+-    gst_caps_replace (&camera->preview_caps, NULL);
+-  }
++  gst_caps_replace (&camera->image_capture_caps, NULL);
++  gst_caps_replace (&camera->view_finder_caps, NULL);
++  gst_caps_replace (&camera->allowed_caps, NULL);
++  gst_caps_replace (&camera->preview_caps, NULL);
++  gst_caps_replace (&camera->video_preview_caps, NULL);
++  gst_buffer_replace (&camera->video_preview_buffer, NULL);
+ 
+   if (camera->event_tags) {
+     gst_tag_list_free (camera->event_tags);
+@@ -1690,6 +1700,7 @@ image_pad_blocked (GstPad * pad, gboolean blocked, gpointer user_data)
+ static gboolean
+ gst_camerabin_send_preview (GstCameraBin * camera, GstBuffer * buffer)
+ {
++  GstElement *pipeline;
+   GstBuffer *prev = NULL;
+   GstStructure *s;
+   GstMessage *msg;
+@@ -1697,7 +1708,9 @@ gst_camerabin_send_preview (GstCameraBin * camera, GstBuffer * buffer)
+ 
+   GST_DEBUG_OBJECT (camera, "creating preview");
+ 
+-  prev = gst_camerabin_preview_convert (camera, buffer);
++  pipeline = (camera->mode == MODE_IMAGE) ?
++      camera->preview_pipeline : camera->video_preview_pipeline;
++  prev = gst_camerabin_preview_convert (camera, pipeline, buffer);
+ 
+   GST_DEBUG_OBJECT (camera, "preview created: %p", prev);
+ 
+@@ -1801,6 +1814,14 @@ gst_camerabin_have_vid_buffer (GstPad * pad, GstBuffer * buffer,
+   gboolean ret = TRUE;
+   GST_LOG ("got video buffer %p with size %d",
+       buffer, GST_BUFFER_SIZE (buffer));
++
++  if (camera->video_preview_caps &&
++      !camera->video_preview_buffer &&
++      !camera->stop_requested) {
++    GST_DEBUG ("storing video preview %p", buffer);
++    camera->video_preview_buffer = gst_buffer_copy (buffer);
++  }
++
+   if (G_UNLIKELY (camera->stop_requested)) {
+     gst_camerabin_send_video_eos (camera);
+     ret = FALSE;                /* Drop buffer */
+@@ -1984,6 +2005,12 @@ gst_camerabin_do_stop (GstCameraBin * camera)
+     GST_DEBUG_OBJECT (camera, "mark stop");
+     camera->stop_requested = TRUE;
+ 
++    if (camera->video_preview_caps && camera->video_preview_buffer) {
++      gst_camerabin_send_preview (camera, camera->video_preview_buffer);
++      gst_buffer_unref (camera->video_preview_buffer);
++      camera->video_preview_buffer = NULL;
++    }
++
+     /* Take special care when stopping paused video capture */
+     if ((camera->active_bin == camera->vidbin) && camera->paused) {
+       /* Send eos event to video bin before setting it to playing */
+@@ -2721,6 +2748,8 @@ gst_camerabin_init (GstCameraBin * camera, GstCameraBinClass * gclass)
+   camera->pad_src_vid = NULL;
+   camera->pad_view_vid = NULL;
+ 
++  camera->video_preview_buffer = NULL;
++
+   /* source elements */
+   camera->src_vid_src = NULL;
+   camera->src_filter = NULL;
+@@ -2765,7 +2794,15 @@ gst_camerabin_dispose (GObject * object)
+   gst_element_set_state (camera->vidbin, GST_STATE_NULL);
+   gst_object_unref (camera->vidbin);
+ 
+-  gst_camerabin_preview_destroy_pipeline (camera);
++  if (camera->preview_pipeline) {
++    gst_camerabin_preview_destroy_pipeline (camera, camera->preview_pipeline);
++    camera->preview_pipeline = NULL;
++  }
++  if (camera->video_preview_pipeline) {
++    gst_camerabin_preview_destroy_pipeline (camera,
++        camera->video_preview_pipeline);
++    camera->video_preview_pipeline = NULL;
++  }
+ 
+   camerabin_destroy_elements (camera);
+   camerabin_dispose_elements (camera);
+@@ -2890,24 +2927,40 @@ gst_camerabin_set_property (GObject * object, guint prop_id,
+       }
+       break;
+     case ARG_PREVIEW_CAPS:
+-      /* Currently camerabin only provides preview for images, so we don't
+-       * even handle video mode */
++    {
++      GstElement **prev_pipe = NULL;
++      GstCaps **prev_caps = NULL;
++      GstCaps *new_caps = NULL;
++
+       if (camera->mode == MODE_IMAGE) {
+-        GstCaps *new_caps = NULL;
++        prev_pipe = &camera->preview_pipeline;
++        prev_caps = &camera->preview_caps;
++      }
++      else if (camera->mode == MODE_VIDEO) {
++        prev_pipe = &camera->video_preview_pipeline;
++        prev_caps = &camera->video_preview_caps;
++      }
++
++      new_caps = (GstCaps *) gst_value_get_caps (value);
+ 
+-        new_caps = (GstCaps *) gst_value_get_caps (value);
++      if (prev_caps && !gst_caps_is_equal (*prev_caps, new_caps)) {
+         GST_DEBUG_OBJECT (camera,
+-            "setting preview caps: %" GST_PTR_FORMAT " -> %" GST_PTR_FORMAT,
+-             camera->preview_caps, new_caps);
+-
+-        if (!gst_caps_is_equal (camera->preview_caps, new_caps)) {
+-          GST_OBJECT_LOCK (camera);
+-          gst_caps_replace (&camera->preview_caps, new_caps);
+-          GST_OBJECT_UNLOCK (camera);
+-          gst_camerabin_preview_create_pipeline (camera);
++            "setting preview caps: %" GST_PTR_FORMAT, new_caps);
++        if (*prev_pipe) {
++          gst_camerabin_preview_destroy_pipeline (camera, *prev_pipe);
++          *prev_pipe = NULL;
++        }
++        GST_OBJECT_LOCK (camera);
++        gst_caps_replace (prev_caps, new_caps);
++        GST_OBJECT_UNLOCK (camera);
++
++        if (new_caps && !gst_caps_is_any (new_caps) &&
++          !gst_caps_is_empty (new_caps)) {
++          *prev_pipe = gst_camerabin_preview_create_pipeline (camera, new_caps);
+         }
+       }
+       break;
++    }
+     default:
+       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
+       break;
+@@ -2980,7 +3033,10 @@ gst_camerabin_get_property (GObject * object, guint prop_id,
+       gst_value_set_caps (value, camera->view_finder_caps);
+       break;
+     case ARG_PREVIEW_CAPS:
+-      gst_value_set_caps (value, camera->preview_caps);
++      if (camera->mode == MODE_IMAGE)
++        gst_value_set_caps (value, camera->preview_caps);
++      else if (camera->mode == MODE_VIDEO)
++        gst_value_set_caps (value, camera->video_preview_caps);
+       break;
+     default:
+       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
+diff --git a/gst/camerabin/gstcamerabin.h b/gst/camerabin/gstcamerabin.h
+index 7a656fb..8145335 100644
+--- a/gst/camerabin/gstcamerabin.h
++++ b/gst/camerabin/gstcamerabin.h
+@@ -87,6 +87,9 @@ struct _GstCameraBin
+   /* Caps used to create preview image */
+   GstCaps *preview_caps;
+ 
++  /* Caps used to create video preview image */
++  GstCaps *video_preview_caps;
++
+   /* The digital zoom (from 100% to 1000%) */
+   gint zoom;
+ 
+@@ -110,6 +113,9 @@ struct _GstCameraBin
+   GstElement *vidbin;           /*  bin that holds video capturing elements */
+   GstElement *active_bin;       /* image or video bin that is currently in use */
+   GstElement *preview_pipeline; /* pipeline for creating preview images */
++  GstElement *video_preview_pipeline; /* pipeline for creating video preview image */
++
++  GstBuffer *video_preview_buffer;    /* buffer for storing video preview */
+ 
+   /* source elements */
+   GstElement *src_vid_src;
