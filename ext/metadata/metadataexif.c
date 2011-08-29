@@ -1071,8 +1071,8 @@ metadatamux_exif_for_each_tag_in_list (const GstTagList * list,
           rt++;
 
           /* SS - seconds */
-          rt->numerator = (gulong) (0.5 + v * 3600.0);
-          rt->denominator = 1;
+          rt->numerator = (gulong) (0.5 + v * 3600.0 * 100.0);
+          rt->denominator = 100;
           GST_DEBUG ("sec: %lf : %lu / %lu", v, (gulong) rt->numerator,
               (gulong) rt->denominator);
 
