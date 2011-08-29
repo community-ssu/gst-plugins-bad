@@ -36,6 +36,5 @@ tests/examples/shapewipe/shapewipe-example
 *.la
 *.o
 *~
-/m4
 Makefile.in
 Makefile
