@@ -1,16 +1,11 @@
-gst-plugins-bad0.10 (0.10.14-git265-0maemo10+0m7) unstable; urgency=low
-
-  * fixex https://bugs.maemo.org/show_bug.cgi?id=6584
-    GPS geotagged pictures truncate precision of GPS reading (0 decimal places)
-
- -- Marco Ballesio <marco.ballesio@nokia.com>  Mon, 29 Aug 2011 22:57:15 +0200
-
-gst-plugins-bad0.10 (0.10.14-git265-0maemo10+0m6) unstable; urgency=low
+gst-plugins-bad0.10 (0.10.14-git266-0maemo10+0cssu6) unstable; urgency=low
 
   * make package buildable (added m4 and win32/common/config.h files from
     original maemo source pacakge
+  * fixex https://bugs.maemo.org/show_bug.cgi?id=6584
+    GPS geotagged pictures truncate precision of GPS reading (0 decimal places)
 
- -- Marco Ballesio <marco.ballesio@nokia.com>  Mon, 29 Aug 2011 22:32:28 +0200
+ -- Nicolai Hess <nicolaihess@web.de>  Thu, 01 Sep 2011 22:19:33 +0300
 
 gst-plugins-bad0.10 (0.10.14-git265-0maemo10+0m5) unstable; urgency=low
 
