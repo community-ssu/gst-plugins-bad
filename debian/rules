@@ -15,6 +15,11 @@ else
     CFLAGS += -O2
 endif
 
+# Use thumb mode if it enabled.
+ifneq (,$(findstring thumb,$(DEB_BUILD_OPTIONS)))
+	CFLAGS += -mthumb -mfpu=neon
+endif
+
 ifeq (,$(findstring debug,$(DEB_BUILD_OPTIONS)))
     CFLAGS += -DG_DISABLE_CAST_CHECKS -DGST_DISABLE_GST_DEBUG=1
 endif
