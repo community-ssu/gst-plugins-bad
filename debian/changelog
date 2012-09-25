@@ -1,3 +1,9 @@
+gst-plugins-bad0.10 (0.10.14-git266-0maemo10+0cssu6+thumb0) unstable; urgency=low
+
+  * Thumb2 compile
+
+ -- Ivaylo Dimitrov <freemangordon@abv.bg>  Tue, 25 Sep 2012 08:19:11 +0300
+
 gst-plugins-bad0.10 (0.10.14-git266-0maemo10+0cssu6) unstable; urgency=low
 
   * make package buildable (added m4 and win32/common/config.h files from
