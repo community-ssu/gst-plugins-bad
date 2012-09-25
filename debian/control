@@ -31,7 +31,8 @@ Architecture: any
 Section: libs
 Depends: ${misc:Depends},
          ${shlibs:Depends},
-         gstreamer0.10-plugins-base (>= 0.10.25-0maemo3), kernel-feature-errata-430973-workaround [armel]
+         gstreamer0.10-plugins-base (>= 0.10.25-0maemo3),
+         kernel-feature-errata-430973-workaround [armel]
 Replaces: gstreamer0.10-plugins-bad-multiverse (<< 0.10.5-2), gst-plugins-farsight (<< 0.12.11-0maemo1)
 XB-GStreamer-Version: ${gstreamer:Version}
 XB-GStreamer-Elements: ${gstreamer:Elements}
@@ -71,7 +72,8 @@ Description: Extra GStreamer plugins from the "bad" set
 Package: gstreamer0.10-plugins-bad-extra
 Architecture: any
 Section: libs
-Depends: ${misc:Depends}, ${shlibs:Depends}, kernel-feature-errata-430973-workaround [armel]
+Depends: ${misc:Depends}, ${shlibs:Depends},
+         kernel-feature-errata-430973-workaround [armel]
 Replaces: gstreamer0.10-plugins-bad (<< 0.10.13-git209-0maemo17)
 Description: Extra GStreamer plugins from the "bad" set
  GStreamer is a streaming media framework, based on graphs of filters
